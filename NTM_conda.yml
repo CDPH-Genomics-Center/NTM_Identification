@@ -1,0 +1,10 @@
+# run: conda env create --file environment.yml
+name: test-env
+dependencies:
+- python
+- biopython
+- blast
+- pip
+- pip:
+  # works for regular pip packages
+  - orthoani
