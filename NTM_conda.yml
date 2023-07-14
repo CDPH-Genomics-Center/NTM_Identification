@@ -1,5 +1,5 @@
 # run: conda env create --file environment.yml
-name: test-env
+name: NTM_validation
 dependencies:
 - python
 - biopython
@@ -8,3 +8,4 @@ dependencies:
 - pip:
   # works for regular pip packages
   - orthoani
+  - eutils
