@@ -57,7 +57,7 @@ for genome_file in Path(genome_directory).glob("*.fasta"):
 	for entry in blast_output:
 		entry = entry.split("\t")
 		
-		hit_list.append([entry[-1],entry])
+		hit_list.append([entry[-1],entry]) 
 	
 	hit_list.sort()	
 	
