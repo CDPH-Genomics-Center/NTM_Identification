@@ -6,10 +6,12 @@ Description
 
 #Imported modules
 import os
+import glob
 import time
 import json
 import shutil
 import argparse
+import newick_tree_plotter
 from math import ceil
 from pathlib import Path
 from statistics import mean
@@ -19,7 +21,7 @@ from multiprocessing import cpu_count
 
 #Authorship information
 __author__ = "Angus Angermeyer"
-__copyright__ = "Copyright 2023, Dr. Angus Angermeyer"
+__copyright__ = "Copyright 2023, Dr. Angus Angermeyer (CDPH)"
 __license__ = "GPL"
 __version__ = "0.1.0"
 __email__ = "angus.angermeyer@gmail.com"
@@ -53,6 +55,9 @@ parser.add_argument('--min_contig_length', type=str, default=500,
 parser.add_argument('--blast_coverage', type=str, default=90,
 	help = "Optional. Default = 90")
 
+parser.add_argument('--bootstrap_threshold', type=str, default=70,
+	help = "Optional. Default = 70")
+
 parser.add_argument('-t', '--threads', type=str, default=cpu_count(),
 	help="Optional. Default = Max. available") 
 
@@ -66,37 +71,15 @@ thread_count = 4
 
 
 
-
 def log_result(item, value, font=None):
-	offset = 7
+	#This is just some dumb logic to make the results file look pretty.
+	#Adds tabs to mae everything line up. Increase offset to make space for longer item names.
+	offset = 8
 	gap = '\t' * (offset-ceil(len(item.lstrip('\n'))/4+0.01))
 	
-# 	
-# 	if len(item) < 4:
-# 		gap = "\t\t\t\t\t\t"
-# 	
-# 	elif len(item) > 3:
-# 		gap = "\t\t\t\t\t"
-# 
-# 	elif len(item) > 7:
-# 		gap = "\t\t\t\t"
-# 	
-# 	elif len(item) > 11:
-# 		gap = "\t\t\t"
-# 	
-# 	elif len(item) > 15:
-# 		gap = "\t\t"
-# 	
-# 	elif len(item)  > 19:
-# 		gap = "\t"
-# 	
-# 	else:
-# 		gap = "\t\t\t\t\t"
-	
+	#Different type of results logging.
 	with open(result_log_name, 'a') as file:
 		if font == 'header':
-# 			file.write('#'*50)
-# 			file.write(f"\n{item}\n\n")
 			file.write(f"\n{'#'*50}\n{item}\n\n")
 
 		elif font == 'version':
@@ -291,7 +274,7 @@ def extract_target(sample_genome, target_dir, reference_dir, qcov_hsp_perc=90):
 		
 
 		with open(f"{sample_name}_{target_name}.fasta", 'w') as fasta_output:
-			fasta_output.write(f">{sample_name}_{target_name}\n")
+			fasta_output.write(f">{args.sample_name}_{target_name}\n") ##Grabbing sample name from global here. Should fix.
 			fasta_output.write(sequence+"\n")
 
 			log_result(f"{target_name}", f"{hit_accession}")
@@ -314,17 +297,30 @@ def extract_target(sample_genome, target_dir, reference_dir, qcov_hsp_perc=90):
 					ref_hit_accession, ref_sequence = blast_top_hit(reference_seq, target_seq, qcov_hsp_perc)
 	
 					with open(f"{reference_dir}/{target_name}/{ref_name}_{target_name}.fasta", 'w') as fasta_output:
-						fasta_output.write(f">{ref_name}_{target_name}\n")
+						ref_record = next(SeqIO.parse(reference_seq, 'fasta'))
+						ref_header_list = ref_record.description.split(' ')
+						genus = ref_header_list[1]
+						species = ref_header_list[2]
+						accession = ref_header_list[0]
+						
+						if genus == 'Mycobacterium':
+							genus = 'M.'
+						
+						fasta_output.write(f">{genus}_{species}_{accession}\n")
 						fasta_output.write(ref_sequence+"\n")
 
 				except TypeError: #If no blast hit, it will return nonetype instead of sequence
 					with open(console_log_name, 'a') as log:
 						log.write(f"\n\nNo blast hit:\t{reference_seq}\t{target_seq}\n\n")
 					
-				
+
 
 
 def concatenate_align(sample_target_seq, ref_target_dir):
+	"""
+	Description
+	"""
+	
 	sample_target_name = Path(sample_target_seq).stem
 
 	with open(f"{sample_target_name}_references.fasta", 'w') as combined_fasta:
@@ -344,57 +340,109 @@ def concatenate_align(sample_target_seq, ref_target_dir):
 		f">> {console_log_name} 2>&1",
 		shell=True)
 
-	
-	
 	log_result(Path(ref_target_dir).name, f"{ref_count} aligned seqs")
 	
 
-
-
-
-
-
-log_result("NTM Validation Pipeline (pre-alpha)", None, "header")
-log_result("Sample name", args.sample_name)
-log_result("Date", run_name.split('_')[-2])
-log_result("Time", run_name.split('_')[-1].replace('-',':'))
-
-
-
-
-log_result("Read QC and filtering with fastp", None, "header")
-log_result("fastp version", 'fastp -v', 'version')
-trimmed_reads = fastp_filtering(args.nanopore_reads, args.min_fastq_length, args.min_fastq_qscore)
-
-log_result("De novo assembley with Flye", None, "header")
-log_result("Flye version", 'flye -v', 'version')
-flye_assembly(trimmed_reads)
-
-log_result("Species ANI identification with fastANI", None, "header")
-log_result("fastANI version", 'fastANI -v', 'version')
-fastani_compute(f"{run_name}_assembly.fasta")
-
-log_result("Target sequence extraction via BLASTn", None, "header")
-log_result("BLASTn version", 'blastn -version', 'version')
-extract_target(f"{run_name}_assembly.fasta", args.target_seq_dir, args.NTM_ref_dir, qcov_hsp_perc=args.blast_coverage)
-
-log_result("Target sequence alignment with Muscle", None, "header")
-log_result("Muscle version", 'muscle -version', 'version')
-for target_seq in Path(args.target_seq_dir).glob("*.fasta"):
-	target_name = target_seq.stem
-	ref_target_dir = f"{args.NTM_ref_dir}/{target_name}/"
-	concatenate_align(f"{run_name}_assembly_{target_name}.fasta", ref_target_dir)
+def build_phylogeny(target_name, alignment_file, fast_boot_iters=1000):
+	"""
+	
+	Bootstrap support method information:
+	http://www.iqtree.org/doc/Frequently-Asked-Questions#how-do-i-interpret-ultrafast-bootstrap-ufboot-support-values
+	"""
+	
+	
+	run("iqtree "
+		f"-s {alignment_file} "
+		f"-bb {fast_boot_iters} "
+		f">> {console_log_name} 2>&1",
+		shell=True)
+	
+	
+	log_result(f"\n{target_name} Bootstraps", fast_boot_iters)
+	with open(f"{alignment_file}.iqtree") as tree_results:
+		for line in tree_results:
+			if line.startswith("Random seed number"):
+				log_result(f"{target_name} seed", line[20:-1])			
+			elif line.startswith("Best-fit model according to BIC"):
+				log_result(f"{target_name} model", line[33:-1])
 
 	
 
+	#Clean up additional IQtree output. I suspect essentially all users are just going to want to see a final tree,
+	#so I'm tossing these files for now. In future probably should be exposed via a "--keep_intermediates" flag.
+	#Also, in testing I rarely see difference b/w consensus tree and best tree. Going with best for now.
+	exts_to_remove = ('*.ckp.gz', '*.iqtree', '*.contree', '*.splits.nex', '*.bionj', '*.mldist', '*.model.gz', '*.aln.log')
+	for ext in exts_to_remove:
+		for unused_file in glob.glob(ext):
+			os.remove(unused_file)
+
+
+
+if __name__ == "__main__":
+
+	log_result("NTM Validation Pipeline", None, "header")
+	log_result("Sample name", args.sample_name)
+	log_result("Date", run_name.split('_')[-2])
+	log_result("Time", run_name.split('_')[-1].replace('-',':'))
+	log_result("Version", __version__)
+
+
+
+	log_result("Read QC and filtering with fastp", None, "header")
+	log_result("fastp version", 'fastp -v', 'version')
+	trimmed_reads = fastp_filtering(args.nanopore_reads, args.min_fastq_length, args.min_fastq_qscore)
+
+	log_result("De novo assembley with Flye", None, "header")
+	log_result("Flye version", 'flye -v', 'version')
+	flye_assembly(trimmed_reads)
+
+	log_result("Species ANI identification with fastANI", None, "header")
+	log_result("fastANI version", 'fastANI -v', 'version')
+	fastani_compute(f"{run_name}_assembly.fasta")
+
+	log_result("Target sequence extraction via BLASTn", None, "header")
+	log_result("BLASTn version", 'blastn -version', 'version')
+	extract_target(f"{run_name}_assembly.fasta", args.target_seq_dir, args.NTM_ref_dir, qcov_hsp_perc=args.blast_coverage)
+
+	log_result("Target sequence alignment with Muscle", None, "header")
+	log_result("Muscle version", 'muscle -version', 'version')
+	for target_seq in Path(args.target_seq_dir).glob("*.fasta"):
+		target_name = target_seq.stem
+		ref_target_dir = f"{args.NTM_ref_dir}/{target_name}/"
+		concatenate_align(f"{run_name}_assembly_{target_name}.fasta", ref_target_dir)
+
+	log_result("ML tree phylogeny with IQ-TREE", None, "header")
+	log_result("IQ-TREE version", 'iqtree -version', 'version')
+	for target_seq in Path(args.target_seq_dir).glob("*.fasta"):
+		target_name = target_seq.stem
+		build_phylogeny(target_name, f"{run_name}_assembly_{target_name}_references.aln")
+
+
+	# log_result("Tree plotting with ", None, "header")
+	# log_result("IQ-TREE version", 'iqtree -version', 'version')
+	for target_seq in Path(args.target_seq_dir).glob("*.fasta"):
+		target_name = target_seq.stem
+		newick_tree_plotter.plot_tree(
+			f"{run_name}_assembly_{target_name}_references.aln.treefile",
+			f"{run_name}_assembly_{target_name}.pdf",
+			sample_name=f"{args.sample_name}_{target_name}",
+			plot_title=target_name)
 
 
 
 
 
+"""
+Todo:
+
+Multigene model in IQtree:
+http://www.iqtree.org/doc/Advanced-Tutorial
 
 
 
+
+
+"""
 
 
 
